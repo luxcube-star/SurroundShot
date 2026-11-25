@@ -1,6 +1,7 @@
 // StitchSession.swift
 // 합성 작업(백그라운드)과 사진 앱 저장. 앱과 공유 확장이 함께 사용합니다.
 
+import CoreLocation
 import Foundation
 import ImageIO
 import Photos
@@ -159,6 +160,33 @@ nonisolated final class StitchSession: @unchecked Sendable {
     }
 }
 
+/// 촬영 위치 (스레드 사이로 넘기기 쉬운 값 형태)
+nonisolated struct CaptureLocation: Sendable {
+    let latitude: Double
+    let longitude: Double
+    let altitude: Double
+    let horizontalAccuracy: Double
+    let verticalAccuracy: Double
+    let timestamp: Date
+
+    init(_ l: CLLocation) {
+        latitude = l.coordinate.latitude
+        longitude = l.coordinate.longitude
+        altitude = l.altitude
+        horizontalAccuracy = l.horizontalAccuracy
+        verticalAccuracy = l.verticalAccuracy
+        timestamp = l.timestamp
+    }
+
+    var clLocation: CLLocation {
+        CLLocation(coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude),
+                   altitude: altitude,
+                   horizontalAccuracy: horizontalAccuracy,
+                   verticalAccuracy: verticalAccuracy,
+                   timestamp: timestamp)
+    }
+}
+
 /// 사진 앱(보관함)에 저장
 nonisolated enum PhotoSaver {
     enum SaveError: LocalizedError {
@@ -168,11 +196,16 @@ nonisolated enum PhotoSaver {
         }
     }
 
-    static func save(_ jpeg: Data) async throws {
+    /// - Parameter location: 주면 사진 앱에 이 위치로 기록합니다 (앱 카메라로 찍은 사진용).
+    static func save(_ imageData: Data, location: CaptureLocation? = nil) async throws {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else { throw SaveError.denied }
         try await PHPhotoLibrary.shared().performChanges {
-            PHAssetCreationRequest.forAsset().addResource(with: .photo, data: jpeg, options: nil)
+            let request = PHAssetCreationRequest.forAsset()
+            request.addResource(with: .photo, data: imageData, options: nil)
+            if let location {
+                request.location = location.clLocation
+            }
         }
     }
 }

@@ -135,6 +135,8 @@ APP_SETTINGS = {
     **TARGET_COMMON,
     "ENABLE_PREVIEWS": "YES",
     "INFOPLIST_KEY_LSApplicationCategoryType": "public.app-category.photography",
+    "INFOPLIST_KEY_NSCameraUsageDescription": "주위환경 사진을 촬영합니다.",
+    "INFOPLIST_KEY_NSLocationWhenInUseUsageDescription": "촬영한 사진에 촬영 위치를 기록합니다.",
     "INFOPLIST_KEY_UIApplicationSceneManifest_Generation": "YES",
     "INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents": "YES",
     "INFOPLIST_KEY_UILaunchScreen_Generation": "YES",

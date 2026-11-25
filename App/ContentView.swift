@@ -1,15 +1,23 @@
-// ContentView.swift (앱 본체 화면)
-// 사진 보관함에서 2~12장을 골라 합성합니다.
-// 공유 확장이 메모리 부족으로 실패할 때도 이 화면에서는 더 큰 해상도로 합성할 수 있습니다.
+// ContentView.swift
+// 앱 첫 화면 = 촬영 화면(CameraScreen).
+// AlbumStitchView: 사진 보관함(기본 카메라로 찍은 사진)에서 2~12장을 골라 합성하는 화면.
 
 import PhotosUI
 import SwiftUI
 
 struct ContentView: View {
+    var body: some View {
+        CameraScreen()
+    }
+}
+
+/// 앨범에서 골라 합성 (촬영 화면의 [앨범에서 합성] 버튼)
+struct AlbumStitchView: View {
     // 앱 본체는 메모리 여유가 있어 더 크게 합성합니다.
     @StateObject private var model = StitchViewModel(maxPixelSize: 2400, maxOutputSide: 6000)
     @State private var selection: [PhotosPickerItem] = []
     @State private var showGuide = false
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
@@ -31,8 +39,11 @@ struct ContentView: View {
                 }
                 .padding()
             }
-            .navigationTitle("주위환경 합성")
+            .navigationTitle("앨범에서 합성")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("닫기") { dismiss() }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showGuide = true } label: { Image(systemName: "questionmark.circle") }
                 }
@@ -69,21 +80,24 @@ struct GuideView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("촬영 순서 (2줄 × 4장 예시)") {
-                    Text("윗줄: 1 → 2 → 3 → 4 (폰을 약간 위로)\n아랫줄: 5 → 6 → 7 → 8 (폰을 약간 아래로)")
-                        .font(.body.monospaced())
+                Section("앱으로 촬영 (추천)") {
+                    Text("1. 아래 [합성] 모드를 고르고, 오른쪽 아래에서 칸 배치(예: 2줄 × 4장)를 고릅니다.\n2. 본건을 가운데 원에 두고 [시작]을 누릅니다. 이때 노출·초점이 고정됩니다.\n3. 노란 원을 가운데 원에 맞추면 초록색이 됩니다. 그때 셔터를 누릅니다.\n4. 마지막 장을 찍으면 바로 합성 결과가 열립니다.")
+                    Text("순서: 윗줄 왼쪽 → 오른쪽, 아랫줄 오른쪽 → 왼쪽 ('ㄹ' 자). 왼쪽 위 칸 지도에 표시됩니다.")
+                        .font(.caption)
                 }
                 Section("꼭 지킬 것") {
-                    Label("제자리에 서서 몸(폰)만 돌리며 찍기", systemImage: "figure.stand")
-                    Label("옆 사진·위아래 사진과 30% 이상 겹치기", systemImage: "square.on.square")
-                    Label("모든 사진을 같은 배율(1x)로", systemImage: "camera.aperture")
-                    Label("첫 장 전에 화면을 길게 눌러 노출·초점 고정 (AE/AF 잠금)", systemImage: "lock")
+                    Label("제자리에 서서 몸(폰)만 돌리기", systemImage: "figure.stand")
+                    Label("폰은 세로로 들기", systemImage: "iphone")
+                    Label("가까운 물체(전봇대, 차량)는 경계에서 어긋날 수 있음", systemImage: "exclamationmark.triangle")
                 }
-                Section("사용 방법") {
-                    Text("사진 앱에서 사진 여러 장 선택 → 공유 → 'Surround Shot' (주위환경 합성)\n또는 이 앱에서 '사진 선택'")
+                Section("1장 촬영") {
+                    Text("[1장] 모드에서 셔터를 누르면 바로 사진 앱에 저장됩니다. 촬영 위치도 함께 기록됩니다.")
+                }
+                Section("밤에는") {
+                    Text("기본 카메라의 야간 모드는 이 앱에서 쓸 수 없습니다. 밤에는 기본 카메라로 찍고, [앨범에서 합성] 또는 사진 앱 → 공유 → '주위환경 합성'으로 합성하세요.")
                 }
                 Section("결과가 이상할 때") {
-                    Text("• 경계가 어긋나면: 가까운 물체(전봇대, 차량)를 피하고 다시 찍기\n• 일부 사진이 빠지면: 겹침을 더 크게\n• 공유 메뉴에서 갑자기 닫히면: 이 앱에서 합성 (메모리 여유가 더 큼)")
+                    Text("• 경계가 어긋나면: 가까운 물체를 피하고 다시 찍기\n• 일부 사진이 빠지면: 겹침을 더 크게\n• 평면이 원통으로 바뀌면: 너무 넓게 찍은 것 — 칸 수를 줄이거나 원통 사용")
                 }
             }
             .navigationTitle("촬영 요령")

@@ -27,6 +27,8 @@ final class StitchViewModel: ObservableObject {
     private static let outputModeKey = "outputMode"
     private let session: StitchSession
     private var sourceData: [Data] = []
+    /// 앱 카메라로 찍었을 때의 촬영 위치 (앨범에서 고른 사진은 nil — 원본 사진의 위치 정보를 복사)
+    private var captureLocation: CaptureLocation?
     private var jpegData: Data?
     private var counts: StitchCounts?
 
@@ -43,8 +45,9 @@ final class StitchViewModel: ObservableObject {
     var hasResult: Bool { jpegData != nil }
 
     /// 새 사진들로 합성 시작
-    func start(with data: [Data]) {
+    func start(with data: [Data], location: CaptureLocation? = nil) {
         sourceData = data
+        captureLocation = location
         stitch()
     }
 
@@ -132,7 +135,7 @@ final class StitchViewModel: ObservableObject {
         saveMessage = nil
         Task {
             do {
-                try await PhotoSaver.save(jpeg)
+                try await PhotoSaver.save(jpeg, location: self.captureLocation)
                 self.saveMessage = "사진 앱에 저장했습니다."
             } catch {
                 self.saveMessage = error.localizedDescription
