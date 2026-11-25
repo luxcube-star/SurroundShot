@@ -1,0 +1,129 @@
+name: Build IPA (AltStore)
+
+# 개인 설치용 .ipa 를 만든다 (모아+ 저장소와 같은 방식).
+# 서명하지 않은 빌드라 그대로는 설치되지 않고, AltStore/AltServer 가 설치할 때
+# 사용자의 Apple 계정으로 다시 서명한다.
+# 결과물은 실행 페이지 아래 Artifacts 의 "SurroundShot-ipa" 에서 내려받는다.
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  stitch-core-test:
+    # 합성 로직(Shared/StitchCore.hpp)을 리눅스에서 실제 사진으로 검사한다 — 빠르고 싸다.
+    name: Stitch core test (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OpenCV
+        run: sudo apt-get update -q && sudo apt-get install -y -q libopencv-dev
+
+      - name: Fetch sample photos (opencv_extra/testdata/stitching)
+        run: |
+          git clone -q --depth 1 --filter=blob:none --sparse https://github.com/opencv/opencv_extra.git /tmp/oextra
+          git -C /tmp/oextra sparse-checkout set testdata/stitching
+
+      - name: Build and run
+        run: |
+          g++ -std=c++17 -O2 -Wall tests/stitch_test.cpp -o /tmp/stitch_test $(pkg-config --cflags --libs opencv4)
+          mkdir -p /tmp/out
+          T=/tmp/oextra/testdata/stitching
+          /tmp/stitch_test /tmp/out/boat.jpg cyl $T/boat1.jpg $T/boat2.jpg $T/boat3.jpg $T/boat4.jpg $T/boat5.jpg $T/boat6.jpg
+          /tmp/stitch_test /tmp/out/boat_sph.jpg sph $T/boat1.jpg $T/boat2.jpg $T/boat3.jpg $T/boat4.jpg $T/boat5.jpg $T/boat6.jpg
+          /tmp/stitch_test /tmp/out/newspaper.jpg cyl $T/newspaper1.jpg $T/newspaper2.jpg $T/newspaper3.jpg $T/newspaper4.jpg
+
+  ipa:
+    name: Build unsigned IPA
+    runs-on: macos-15
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Cache Swift packages (OpenCV ~200MB)
+        uses: actions/cache@v4
+        with:
+          path: build/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('SurroundShot.xcodeproj/project.pbxproj') }}
+
+      - name: Archive (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project SurroundShot.xcodeproj \
+            -scheme SurroundShot \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -archivePath build/SurroundShot.xcarchive \
+            -clonedSourcePackagesDirPath build/SourcePackages \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            | tee build/xcodebuild.log | grep -E "error:|warning: .*(Shared|App|ShareExtension)/|\*\* " || true
+          test -d build/SurroundShot.xcarchive/Products/Applications
+
+      - name: Package IPA
+        run: |
+          APP=$(find build/SurroundShot.xcarchive/Products/Applications -maxdepth 1 -name "*.app" | head -n 1)
+          if [ -z "$APP" ]; then
+            echo "::error::아카이브에서 .app 을 찾지 못했습니다."
+            exit 1
+          fi
+          if [ ! -d "$APP/PlugIns/ShareExtension.appex" ]; then
+            echo "::error::공유 확장(ShareExtension.appex)이 앱 안에 없습니다."
+            exit 1
+          fi
+          # AltStore/AltServer 는 기본 Info.plist 이름으로 App ID 를 등록한다 — 영문·숫자·공백만 허용.
+          for bundle in "$APP" "$APP"/PlugIns/*.appex; do
+            NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleDisplayName" "$bundle/Info.plist" 2>/dev/null \
+              || /usr/libexec/PlistBuddy -c "Print :CFBundleName" "$bundle/Info.plist")
+            echo "이름: $bundle → $NAME"
+            if ! printf '%s' "$NAME" | grep -Eq '^[A-Za-z0-9 ]+$'; then
+              echo "::error::$bundle 의 이름 '$NAME' 에 App ID 로 쓸 수 없는 글자가 있습니다."
+              exit 1
+            fi
+            if [ -f "$bundle/ko.lproj/InfoPlist.strings" ]; then
+              echo "한국어 이름:"; plutil -p "$bundle/ko.lproj/InfoPlist.strings"
+            else
+              echo "::warning::$bundle 에 ko.lproj/InfoPlist.strings 가 없습니다 (한국어 이름이 안 보임)."
+            fi
+          done
+          echo "공유 확장 설정:"
+          /usr/libexec/PlistBuddy -c "Print :NSExtension" "$APP/PlugIns/ShareExtension.appex/Info.plist"
+          rm -rf Payload && mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry SurroundShot.ipa Payload
+          ls -la SurroundShot.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: SurroundShot-ipa
+          path: SurroundShot.ipa
+          retention-days: 30
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: build/xcodebuild.log
+          retention-days: 7

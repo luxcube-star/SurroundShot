@@ -1,0 +1,4 @@
+/* 한국어 기기에서 보이는 이름. 기본 이름은 영문(Surround Shot)으로 둔다 —
+   AltStore/AltServer 가 기본 Info.plist 의 이름으로 Apple App ID 를 등록하는데,
+   한글·기호가 든 이름은 거절된다 (모아+ 저장소의 같은 방식). */
+"CFBundleDisplayName" = "주위환경 합성";
