@@ -40,11 +40,12 @@ int main(int argc, char** argv) {
     if (argc < 5) { std::printf("usage\n"); return 1; }
     std::vector<cv::Mat> imgs;
     for (int i = 3; i < argc; ++i) { cv::Mat m = cv::imread(argv[i]); if (m.empty()) { std::printf("read fail %s\n", argv[i]); return 1; } imgs.push_back(m); }
-    auto proj = std::string(argv[2]) == "sph" ? stitchcore::Projection::Spherical : stitchcore::Projection::Cylindrical;
+    const std::string pa = argv[2];
+    auto proj = pa == "sph" ? stitchcore::Projection::Spherical : pa == "pla" ? stitchcore::Projection::Plane : stitchcore::Projection::Cylindrical;
     int64 t0 = cv::getTickCount();
     auto r = stitchcore::stitchWithRetry(imgs, proj);
     double sec = (cv::getTickCount() - t0) / cv::getTickFrequency();
-    std::printf("status=%d used=%d/%zu pano=%dx%d time=%.1fs\n", (int)r.status, r.usedCount, imgs.size(), r.pano.cols, r.pano.rows, sec);
+    std::printf("status=%d used=%d/%zu pano=%dx%d time=%.1fs maxAngle=%.1f usedProjection=%d planeFellBack=%d\n", (int)r.status, r.usedCount, imgs.size(), r.pano.cols, r.pano.rows, sec, r.maxAngleDeg, (int)r.usedProjection, (int)r.planeFellBack);
     if (r.status != cv::Stitcher::OK) return 2;
     cv::Rect c = stitchcore::largestAspectRect(r.mask, 4.0 / 3.0);
     std::printf("crop=%d,%d %dx%d ratio=%.4f\n", c.x, c.y, c.width, c.height, c.height ? (double)c.width / c.height : 0);

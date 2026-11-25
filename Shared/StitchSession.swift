@@ -7,21 +7,32 @@ import Photos
 import UniformTypeIdentifiers
 
 /// 투영 방식
+/// 화면 순서: 원통 · 구형 · 평면. 기본은 평면.
 nonisolated enum Projection: Int, CaseIterable, Identifiable, Sendable {
     case cylindrical = 0
     case spherical = 1
+    case plane = 2
 
     var id: Int { rawValue }
     var title: String {
         switch self {
-        case .cylindrical: return "원통 (기본)"
-        case .spherical: return "구면"
+        case .cylindrical: return "원통"
+        case .spherical: return "구형"
+        case .plane: return "평면 (기본)"
+        }
+    }
+    var detail: String {
+        switch self {
+        case .cylindrical: return "세로선(건물 모서리)이 곧게 유지됩니다. 아주 넓게 찍어도 됩니다."
+        case .spherical: return "위아래까지 넓게 찍었을 때 자연스럽습니다."
+        case .plane: return "일반 사진처럼 직선이 곧게 유지됩니다. 너무 넓게 찍으면 자동으로 원통으로 바뀝니다."
         }
     }
     var objc: SSProjection {
         switch self {
         case .cylindrical: return .cylindrical
         case .spherical: return .spherical
+        case .plane: return .plane
         }
     }
 }
@@ -59,6 +70,10 @@ nonisolated enum OutputMode: Int, CaseIterable, Identifiable, Sendable {
 nonisolated struct StitchCounts: Sendable {
     let used: Int
     let total: Int
+    /// 평면을 요청했지만 너무 넓어서 원통으로 바꿨는지
+    let planeFellBack: Bool
+    /// 가운데 방향에서 가장 먼 사진 모서리까지의 각도 (도)
+    let maxAngleDegrees: Double
 }
 
 /// OpenCV 합성기를 감싼 세션. 한 번 합성한 결과를 보관해 두고 형태만 바꿔 다시 만들 수 있습니다.
@@ -83,7 +98,10 @@ nonisolated final class StitchSession: @unchecked Sendable {
         defer { lock.unlock() }
         try stitcher.stitch(imageData: imageData, maxPixelSize: maxPixelSize, projection: projection.objc)
         metadataSource = imageData.first
-        return StitchCounts(used: stitcher.usedCount, total: stitcher.inputCount)
+        return StitchCounts(used: stitcher.usedCount,
+                            total: stitcher.inputCount,
+                            planeFellBack: stitcher.planeFellBack,
+                            maxAngleDegrees: stitcher.maxAngleDegrees)
     }
 
     func render(_ mode: OutputMode) throws -> Data {

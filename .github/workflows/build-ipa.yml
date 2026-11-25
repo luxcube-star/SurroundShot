@@ -38,6 +38,11 @@ jobs:
           T=/tmp/oextra/testdata/stitching
           /tmp/stitch_test /tmp/out/boat.jpg cyl $T/boat1.jpg $T/boat2.jpg $T/boat3.jpg $T/boat4.jpg $T/boat5.jpg $T/boat6.jpg
           /tmp/stitch_test /tmp/out/boat_sph.jpg sph $T/boat1.jpg $T/boat2.jpg $T/boat3.jpg $T/boat4.jpg $T/boat5.jpg $T/boat6.jpg
+          # 평면: 좁은 3장은 평면 그대로, 넓은 6장은 원통으로 자동 전환돼야 함
+          /tmp/stitch_test /tmp/out/boat3_plane.jpg pla $T/boat2.jpg $T/boat3.jpg $T/boat4.jpg | tee /tmp/out/p3.txt
+          grep -q "planeFellBack=0" /tmp/out/p3.txt
+          /tmp/stitch_test /tmp/out/boat6_plane.jpg pla $T/boat1.jpg $T/boat2.jpg $T/boat3.jpg $T/boat4.jpg $T/boat5.jpg $T/boat6.jpg | tee /tmp/out/p6.txt
+          grep -q "planeFellBack=1" /tmp/out/p6.txt
           /tmp/stitch_test /tmp/out/newspaper.jpg cyl $T/newspaper1.jpg $T/newspaper2.jpg $T/newspaper3.jpg $T/newspaper4.jpg
 
   ipa:

@@ -14,7 +14,7 @@ final class StitchViewModel: ObservableObject {
     }
 
     @Published var phase: Phase = .idle
-    @Published var projection: Projection = .cylindrical
+    @Published var projection: Projection = .plane
     @Published var outputMode: OutputMode {
         didSet { UserDefaults.standard.set(outputMode.rawValue, forKey: Self.outputModeKey) }
     }
@@ -115,11 +115,14 @@ final class StitchViewModel: ObservableObject {
             text += " · \(w)×\(h)"
         }
         info = text
-        if let c = counts, c.used < c.total {
-            warning = "\(c.total - c.used)장은 겹치는 부분을 찾지 못해 빠졌습니다."
-        } else {
-            warning = nil
+        var warnings: [String] = []
+        if let c = counts, c.planeFellBack {
+            warnings.append("넓게 찍혀서(가운데에서 최대 \(Int(c.maxAngleDegrees.rounded()))°) 평면으로는 펼 수 없어 원통으로 합성했습니다. 평면은 가운데에서 60° 이내일 때만 됩니다.")
         }
+        if let c = counts, c.used < c.total {
+            warnings.append("\(c.total - c.used)장은 겹치는 부분을 찾지 못해 빠졌습니다.")
+        }
+        warning = warnings.isEmpty ? nil : warnings.joined(separator: "\n")
         phase = .done
     }
 

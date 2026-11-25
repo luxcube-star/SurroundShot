@@ -82,6 +82,8 @@ static NSString *SSMessageForStatus(cv::Stitcher::Status status) {
     _pano.release();
     _mask.release();
     _usedCount = 0;
+    _planeFellBack = NO;
+    _maxAngleDegrees = 0;
     _inputCount = (NSInteger)imageData.count;
 
     if (imageData.count < 2) {
@@ -101,9 +103,9 @@ static NSString *SSMessageForStatus(cv::Stitcher::Status status) {
                 images.push_back(m);
             }
         }
-        const auto proj = projection == SSProjectionSpherical
-            ? stitchcore::Projection::Spherical
-            : stitchcore::Projection::Cylindrical;
+        auto proj = stitchcore::Projection::Plane;
+        if (projection == SSProjectionCylindrical) proj = stitchcore::Projection::Cylindrical;
+        else if (projection == SSProjectionSpherical) proj = stitchcore::Projection::Spherical;
         stitchcore::StitchResult r = stitchcore::stitchWithRetry(images, proj);
         images.clear();
         images.shrink_to_fit();
@@ -114,6 +116,8 @@ static NSString *SSMessageForStatus(cv::Stitcher::Status status) {
         _pano = r.pano;
         _mask = r.mask;
         _usedCount = r.usedCount;
+        _planeFellBack = r.planeFellBack;
+        _maxAngleDegrees = r.maxAngleDeg;
         return YES;
     } catch (const cv::Exception &e) {
         SSSetError(error, 90, [NSString stringWithFormat:@"합성 중 오류가 발생했습니다.\n(%s)", e.what()]);

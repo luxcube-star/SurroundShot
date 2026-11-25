@@ -25,6 +25,7 @@ struct StitchPanel: View {
                 }
                 .pickerStyle(.segmented)
                 .disabled(model.isWorking)
+                Text(model.projection.detail).font(.caption).foregroundStyle(.secondary)
             }
 
             Divider()

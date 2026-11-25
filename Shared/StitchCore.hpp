@@ -18,14 +18,53 @@
 
 namespace stitchcore {
 
-enum class Projection { Cylindrical = 0, Spherical = 1 };
+enum class Projection { Cylindrical = 0, Spherical = 1, Plane = 2 };
+
+// 평면 투영을 허용하는 최대 각도 (화면 가운데 방향에서 사진 모서리까지).
+// 평면은 각도 θ 에서 가장자리가 약 1/cos²θ 배로 늘어납니다 (60° = 4배).
+// 이보다 넓게 찍힌 사진은 가장자리가 지나치게 늘어나고 메모리도 크게 쓰므로 원통으로 바꿉니다.
+constexpr double kPlaneMaxAngleDeg = 60.0;
 
 struct StitchResult {
     cv::Stitcher::Status status = cv::Stitcher::ERR_NEED_MORE_IMGS;
     cv::Mat pano;              // CV_8UC3
     cv::Mat mask;              // CV_8U, 255 = 사진이 채워진 영역
     int usedCount = 0;         // 실제로 합성에 쓰인 사진 수
+    Projection usedProjection = Projection::Plane;  // 실제로 쓴 투영 방식
+    bool planeFellBack = false;  // 평면을 요청했지만 너무 넓어서 원통으로 바꿨는지
+    double maxAngleDeg = 0;      // 가운데 방향에서 가장 먼 사진 모서리까지의 각도
 };
+
+// 카메라 추정 결과에서, 합성 기준 방향(z축)과 각 사진 네 모서리 광선 사이의 최대 각도(도).
+// 평면 투영기와 같은 식(광선 = R · K⁻¹ · 픽셀)을 씁니다.
+inline double maxAngleFromCenterDeg(const std::vector<cv::detail::CameraParams>& cameras) {
+    double maxDeg = 0;
+    for (const auto& c : cameras) {
+        cv::Mat K, R;
+        c.K().convertTo(K, CV_64F);
+        c.R.convertTo(R, CV_64F);
+        const cv::Mat RK = R * K.inv();
+        const double w = c.ppx * 2, h = c.ppy * 2;
+        const double corners[4][2] = {{0, 0}, {w, 0}, {0, h}, {w, h}};
+        for (const auto& p : corners) {
+            const cv::Mat d = RK * (cv::Mat_<double>(3, 1) << p[0], p[1], 1.0);
+            const double z = d.at<double>(2);
+            const double n = cv::norm(d);
+            const double deg = (z <= 0 || n <= 0) ? 180.0 : std::acos(std::min(1.0, z / n)) * 180.0 / CV_PI;
+            maxDeg = std::max(maxDeg, deg);
+        }
+    }
+    return maxDeg;
+}
+
+inline cv::Ptr<cv::WarperCreator> makeWarper(Projection projection) {
+    switch (projection) {
+        case Projection::Spherical: return cv::makePtr<cv::SphericalWarper>();
+        case Projection::Plane: return cv::makePtr<cv::PlaneWarper>();  // 직선이 곧게 (일반 사진처럼)
+        case Projection::Cylindrical:
+        default: return cv::makePtr<cv::CylindricalWarper>();  // 세로선이 곧게
+    }
+}
 
 // 한 번 합성을 시도합니다.
 inline StitchResult runStitch(const std::vector<cv::Mat>& images,
@@ -33,15 +72,23 @@ inline StitchResult runStitch(const std::vector<cv::Mat>& images,
                               double confidenceThresh) {
     StitchResult r;
     cv::Ptr<cv::Stitcher> st = cv::Stitcher::create(cv::Stitcher::PANORAMA);
-    if (projection == Projection::Spherical) {
-        st->setWarper(cv::makePtr<cv::SphericalWarper>());
-    } else {
-        // 원통 투영: 세로선(건물 모서리)이 곧게 유지됩니다.
-        st->setWarper(cv::makePtr<cv::CylindricalWarper>());
-    }
     st->setPanoConfidenceThresh(confidenceThresh);
+    r.usedProjection = projection;
 
-    r.status = st->stitch(images, r.pano);
+    // 1) 사진 사이 위치·각도 계산
+    r.status = st->estimateTransform(images);
+    if (r.status != cv::Stitcher::OK) return r;
+
+    // 2) 투영 방식 결정 — 평면은 너무 넓으면 원통으로 바꿉니다.
+    r.maxAngleDeg = maxAngleFromCenterDeg(st->cameras());
+    if (projection == Projection::Plane && r.maxAngleDeg > kPlaneMaxAngleDeg) {
+        r.planeFellBack = true;
+        r.usedProjection = Projection::Cylindrical;
+    }
+    st->setWarper(makeWarper(r.usedProjection));
+
+    // 3) 펴서 이어 붙이기
+    r.status = st->composePanorama(r.pano);
     if (r.status != cv::Stitcher::OK) return r;
 
     r.usedCount = static_cast<int>(st->component().size());

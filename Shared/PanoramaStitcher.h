@@ -9,7 +9,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// 투영 방식
 typedef NS_ENUM(NSInteger, SSProjection) {
     SSProjectionCylindrical = 0,   ///< 원통 (기본, 건물 세로선이 곧게 유지)
-    SSProjectionSpherical = 1,     ///< 구면
+    SSProjectionSpherical = 1,     ///< 구형
+    SSProjectionPlane = 2,         ///< 평면 (기본, 직선이 곧게 — 너무 넓으면 자동으로 원통)
 };
 
 /// 결과 사진 형태
@@ -27,6 +28,10 @@ FOUNDATION_EXPORT NSString * const SSStitchErrorDomain;
 @property (nonatomic, readonly) NSInteger usedCount;
 /// 마지막 합성에 입력된 사진 수
 @property (nonatomic, readonly) NSInteger inputCount;
+/// 평면을 요청했지만 너무 넓게 찍혀서 원통으로 바꿨는지
+@property (nonatomic, readonly) BOOL planeFellBack;
+/// 합성 기준 방향에서 가장 먼 사진 모서리까지의 각도 (도)
+@property (nonatomic, readonly) double maxAngleDegrees;
 
 /// 사진 원본 데이터(HEIC/JPEG 등)를 받아 합성합니다. 결과는 객체 안에 보관됩니다.
 /// @param maxPixelSize 각 사진을 이 크기(긴 변, px) 이하로 줄여서 합성 (메모리 절약)
