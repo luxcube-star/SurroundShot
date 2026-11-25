@@ -133,6 +133,7 @@ TARGET_COMMON = {
 }
 APP_SETTINGS = {
     **TARGET_COMMON,
+    "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
     "ENABLE_PREVIEWS": "YES",
     "INFOPLIST_KEY_LSApplicationCategoryType": "public.app-category.photography",
     "INFOPLIST_KEY_NSCameraUsageDescription": "주위환경 사진을 촬영합니다.",
