@@ -77,6 +77,13 @@ struct AlbumStitchView: View {
 struct GuideView: View {
     @Environment(\.dismiss) private var dismiss
 
+    static var versionText: String {
+        let info = Bundle.main.infoDictionary
+        let v = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let b = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(v) (빌드 \(b))"
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -95,6 +102,9 @@ struct GuideView: View {
                 }
                 Section("밤에는") {
                     Text("기본 카메라의 야간 모드는 이 앱에서 쓸 수 없습니다. 밤에는 기본 카메라로 찍고, [앨범에서 합성] 또는 사진 앱 → 공유 → '주위환경 합성'으로 합성하세요.")
+                }
+                Section("버전") {
+                    Text(Self.versionText).font(.callout.monospacedDigit())
                 }
                 Section("결과가 이상할 때") {
                     Text("• 경계가 어긋나면: 가까운 물체를 피하고 다시 찍기\n• 일부 사진이 빠지면: 겹침을 더 크게\n• 평면이 원통으로 바뀌면: 너무 넓게 찍은 것 — 칸 수를 줄이거나 원통 사용")

@@ -80,6 +80,7 @@ jobs:
             -destination "generic/platform=iOS" \
             -archivePath build/SurroundShot.xcarchive \
             -clonedSourcePackagesDirPath build/SourcePackages \
+            CURRENT_PROJECT_VERSION=${{ github.run_number }} \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -112,6 +113,7 @@ jobs:
               echo "::warning::$bundle 에 ko.lproj/InfoPlist.strings 가 없습니다 (한국어 이름이 안 보임)."
             fi
           done
+          echo "버전: $(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Info.plist") ($(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Info.plist"))"
           echo "공유 확장 설정:"
           /usr/libexec/PlistBuddy -c "Print :NSExtension" "$APP/PlugIns/ShareExtension.appex/Info.plist"
           # 합성 엔진(OpenCV stitching + 우리 Objective-C++ 코드)이 두 실행 파일에 실제로 들어갔는지 검사.
