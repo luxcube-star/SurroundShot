@@ -66,6 +66,7 @@ jobs:
       - name: Archive (unsigned)
         run: |
           set -o pipefail
+          mkdir -p build
           xcodebuild archive \
             -project SurroundShot.xcodeproj \
             -scheme SurroundShot \
@@ -108,6 +109,18 @@ jobs:
           done
           echo "공유 확장 설정:"
           /usr/libexec/PlistBuddy -c "Print :NSExtension" "$APP/PlugIns/ShareExtension.appex/Info.plist"
+          # 합성 엔진(OpenCV stitching + 우리 Objective-C++ 코드)이 두 실행 파일에 실제로 들어갔는지 검사.
+          # 릴리스 아카이브는 심볼이 벗겨지므로 문자열로 본다.
+          for bin in "$APP/SurroundShot" "$APP/PlugIns/ShareExtension.appex/ShareExtension"; do
+            echo "실행 파일: $bin ($(stat -f %z "$bin") bytes)"
+            OURS=$(strings "$bin" | grep -c "SSStitchErrorDomain" || true)
+            CV=$(strings "$bin" | grep -c "modules/stitching" || true)
+            echo "  SSStitchErrorDomain: $OURS, OpenCV stitching 흔적: $CV"
+            if [ "$OURS" -eq 0 ] || [ "$CV" -eq 0 ]; then
+              echo "::error::$bin 에 합성 엔진이 들어가지 않았습니다."
+              exit 1
+            fi
+          done
           rm -rf Payload && mkdir Payload
           cp -R "$APP" Payload/
           zip -qry SurroundShot.ipa Payload
