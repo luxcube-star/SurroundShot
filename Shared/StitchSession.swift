@@ -68,6 +68,37 @@ nonisolated enum OutputMode: Int, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// 결과 넓이: 실제로 찍힌 부분만 / 가장자리 빈 곳을 조금 채워 더 넓게
+nonisolated enum OutputWidth: Int, CaseIterable, Identifiable, Sendable {
+    case actual = 0
+    case wide = 1
+    case wider = 2
+
+    var id: Int { rawValue }
+    var title: String {
+        switch self {
+        case .actual: return "실제만"
+        case .wide: return "넓게 (3%)"
+        case .wider: return "더 넓게 (6%)"
+        }
+    }
+    /// 결과 넓이 중 빈 곳(찍히지 않은 곳)을 허용하는 비율
+    var maxEmpty: Double {
+        switch self {
+        case .actual: return 0
+        case .wide: return 0.03
+        case .wider: return 0.06
+        }
+    }
+}
+
+/// 가운데 기준점 정보
+nonisolated struct CenterInfo: Sendable {
+    let found: Bool
+    /// 가운데 사진 번호 (nil = 특정 사진 없이 모든 사진의 한가운데)
+    let index: Int?
+}
+
 nonisolated struct StitchCounts: Sendable {
     let used: Int
     let total: Int
@@ -105,19 +136,30 @@ nonisolated final class StitchSession: @unchecked Sendable {
                             maxAngleDegrees: stitcher.maxAngleDegrees)
     }
 
-    /// index 번째 사진을 '가운데 사진'으로 지정 (nil = 없음). 합성 결과에서 위치를 찾으면 true.
-    func setCenter(_ index: Int?) -> Bool {
+    /// index 번째 사진을 '가운데 사진'으로 지정. nil = 자동 (위치를 보고 가운데 사진을 스스로 찾음).
+    func setCenter(_ index: Int?) -> CenterInfo {
         lock.lock()
         defer { lock.unlock() }
-        return stitcher.setCenterPhoto(index: index ?? -1)
+        let found = stitcher.setCenterPhoto(index: index ?? -1)
+        return CenterInfo(found: found, index: stitcher.centerIndex >= 0 ? stitcher.centerIndex : nil)
     }
 
-    func render(_ mode: OutputMode) throws -> Data {
+    func render(_ mode: OutputMode, width: OutputWidth) throws -> Data {
         lock.lock()
         defer { lock.unlock() }
-        let jpeg = try stitcher.jpeg(mode: mode.objc, maxOutputSide: maxOutputSide, quality: 98)
+        let jpeg = try stitcher.jpeg(mode: mode.objc, maxEmpty: width.maxEmpty,
+                                     maxOutputSide: maxOutputSide, quality: 98)
         guard let source = metadataSource else { return jpeg }
         return Self.copyCaptureMetadata(into: jpeg, from: source)
+    }
+
+    /// 세 가지 넓이를 모두 만듭니다 (결과 화면에서 나란히 보고 고르기용).
+    func renderAllWidths(_ mode: OutputMode) throws -> [OutputWidth: Data] {
+        var out: [OutputWidth: Data] = [:]
+        for w in OutputWidth.allCases {
+            out[w] = try render(mode, width: w)
+        }
+        return out
     }
 
     /// 첫 번째 원본 사진의 촬영 날짜·위치(GPS)·기종 정보를 결과 사진에 복사합니다.

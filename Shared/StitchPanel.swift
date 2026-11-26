@@ -28,6 +28,10 @@ struct StitchPanel: View {
                 Text(model.projection.detail).font(.caption).foregroundStyle(.secondary)
             }
 
+            if model.hasResult {
+                widthPicker
+            }
+
             if model.thumbnails.count >= 2 {
                 centerPicker
             }
@@ -44,6 +48,47 @@ struct StitchPanel: View {
         }
     }
 
+    /// 넓이 고르기: 세 결과를 나란히 보여 주고, 누르면 아래 큰 미리보기가 바뀝니다.
+    private var widthPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("넓이").font(.subheadline.weight(.semibold))
+            HStack(alignment: .top, spacing: 10) {
+                ForEach(OutputWidth.allCases) { w in
+                    let selected = model.outputWidth == w
+                    Button { model.selectWidth(w) } label: {
+                        VStack(spacing: 4) {
+                            Group {
+                                if let t = model.widthThumbnails[w] {
+                                    Image(uiImage: t).resizable().scaledToFill()
+                                } else {
+                                    Color.secondary.opacity(0.15)
+                                }
+                            }
+                            .frame(maxWidth: .infinity)
+                            .aspectRatio(4.0 / 3.0, contentMode: .fit)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                            .overlay(RoundedRectangle(cornerRadius: 6)
+                                .stroke(selected ? Color.yellow : .clear, lineWidth: 3))
+                            Text(w.title)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(selected ? Color.yellow : .primary)
+                            if let s = model.widthSizes[w] {
+                                Text("\(Int(s.width))×\(Int(s.height))")
+                                    .font(.caption2.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .disabled(model.isWorking)
+            Text("넓게·더 넓게는 가장자리의 찍히지 않은 곳을 주변 색으로 채워 배경을 더 담습니다.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
     /// 가운데 사진 고르기: 누른 사진이 결과의 정중앙에 옵니다.
     private var centerPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -56,7 +101,7 @@ struct StitchPanel: View {
                             .frame(width: 56, height: 56)
                             .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.15)))
                             .overlay(RoundedRectangle(cornerRadius: 6)
-                                .stroke(model.centerIndex == nil ? Color.yellow : .clear, lineWidth: 3))
+                                .stroke(model.isAutoCenter ? Color.yellow : .clear, lineWidth: 3))
                     }
                     ForEach(Array(model.thumbnails.enumerated()), id: \.offset) { i, img in
                         Button { model.selectCenter(i) } label: {
@@ -80,9 +125,19 @@ struct StitchPanel: View {
                 .padding(.vertical, 3)
             }
             .disabled(model.isWorking)
-            Text("노란 테두리 사진이 결과의 정중앙에 옵니다. '자동'은 가장 크게 자릅니다.")
+            Text(centerCaption)
                 .font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    private var centerCaption: String {
+        if model.isAutoCenter {
+            if let i = model.centerIndex {
+                return "자동: 위치를 보고 \(i + 1)번 사진을 가운데 사진으로 찾았습니다. 다른 사진을 누르면 바꿀 수 있습니다."
+            }
+            return "자동: 가운데 사진이 따로 없어, 모든 사진의 한가운데를 정중앙에 둡니다."
+        }
+        return "노란 테두리 사진이 결과의 정중앙에 옵니다. '자동'을 누르면 다시 자동으로 찾습니다."
     }
 
     private var isFailed: Bool {

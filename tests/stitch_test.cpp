@@ -41,8 +41,8 @@ int main(int argc, char** argv) {
     std::vector<cv::Mat> imgs;
     for (int i = 3; i < argc; ++i) { cv::Mat m = cv::imread(argv[i]); if (m.empty()) { std::printf("read fail %s\n", argv[i]); return 1; } imgs.push_back(m); }
     std::string pa = argv[2];
-    // "c-" 로 시작하면 첫 사진을 '가운데 사진'으로 (예: c-pla)
-    const bool useCenter = pa.rfind("c-", 0) == 0;
+    // "a-" 로 시작하면 가운데 사진을 자동으로 찾아 정중앙에 (예: a-pla)
+    const bool useCenter = pa.rfind("a-", 0) == 0;
     if (useCenter) pa = pa.substr(2);
     auto proj = pa == "sph" ? stitchcore::Projection::Spherical : pa == "pla" ? stitchcore::Projection::Plane : stitchcore::Projection::Cylindrical;
     int64 t0 = cv::getTickCount();
@@ -58,15 +58,23 @@ int main(int argc, char** argv) {
     int holes2 = lr.area() - cv::countNonZero(r.mask(lr));
     std::printf("empty pixels inside 4:3 crop=%d, inside largestRect(%dx%d)=%d\n", holes, lr.width, lr.height, holes2);
     cv::Point2d center;
-    const bool found = useCenter && stitchcore::locatePhotoCenter(r.pano, imgs[0], center);
-    if (useCenter) std::printf("center found=%d at (%.0f, %.0f)\n", (int)found, center.x, center.y);
+    bool found = false;
+    if (useCenter) {
+        auto ac = stitchcore::autoCenter(r.pano, imgs);
+        found = ac.found; center = ac.point;
+        std::printf("auto center found=%d photo=%d at (%.0f, %.0f)\n", (int)ac.found, ac.index + 1, center.x, center.y);
+    }
     const cv::Point2d* cp = found ? &center : nullptr;
     const char* names[3] = {"fill43", "fit43", "original"};
     for (int m = 0; m < 3; ++m) {
-        cv::Mat o = stitchcore::renderOutput(r.pano, r.mask, (stitchcore::OutputMode)m, 4000, cp);
-        std::printf("  mode %-8s -> %dx%d ratio=%.4f\n", names[m], o.cols, o.rows, o.rows ? (double)o.cols / o.rows : 0);
-        cv::imwrite(std::string(argv[1]) + "." + names[m] + ".jpg", o);
-        if (o.empty()) holes = -1;
+        for (double e : {0.0, 0.03, 0.06}) {
+            cv::Mat o = stitchcore::renderOutput(r.pano, r.mask, (stitchcore::OutputMode)m, 4000, cp, e);
+            std::printf("  mode %-8s empty<=%2.0f%% -> %dx%d ratio=%.4f\n", names[m], e * 100, o.cols, o.rows, o.rows ? (double)o.cols / o.rows : 0);
+            char suffix[64]; std::snprintf(suffix, sizeof suffix, ".%s.e%02d.jpg", names[m], (int)(e * 100));
+            cv::imwrite(std::string(argv[1]) + suffix, o);
+            if (o.empty()) holes = -1;
+            if (m == 0 && std::abs((double)o.cols / o.rows - 4.0 / 3.0) > 0.01) holes = -1;
+        }
     }
     cv::Mat vis = r.pano.clone(); cv::rectangle(vis, c, cv::Scalar(0,0,255), 4); cv::rectangle(vis, lr, cv::Scalar(0,255,0), 4);
     cv::imwrite(std::string(argv[1]) + ".full.jpg", vis);

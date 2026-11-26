@@ -19,79 +19,61 @@ final class StitchViewModel: ObservableObject {
     @Published var outputMode: OutputMode {
         didSet { UserDefaults.standard.set(outputMode.rawValue, forKey: Self.outputModeKey) }
     }
+    /// 고른 넓이 (실제만 / 넓게 / 더 넓게)
+    @Published private(set) var outputWidth: OutputWidth {
+        didSet { UserDefaults.standard.set(outputWidth.rawValue, forKey: Self.outputWidthKey) }
+    }
+    /// 고른 결과의 큰 미리보기 (화면용으로 줄인 것)
     @Published private(set) var previewImage: UIImage?
+    /// 넓이별 작은 미리보기
+    @Published private(set) var widthThumbnails: [OutputWidth: UIImage] = [:]
+    /// 넓이별 결과 크기 (픽셀)
+    @Published private(set) var widthSizes: [OutputWidth: CGSize] = [:]
     @Published private(set) var info: String = ""
     @Published private(set) var warning: String?
     @Published var saveMessage: String?
     @Published private(set) var isSaving = false
     /// 입력 사진 작은 미리보기 (가운데 사진 고르기용)
     @Published private(set) var thumbnails: [UIImage] = []
-    /// 가운데 사진 번호 (nil = 지정 안 함 → 가장 큰 사각형으로 자동)
+    /// 가운데 사진 번호 (자동으로 찾았거나 직접 고른 것). nil = 특정 사진 없음
     @Published private(set) var centerIndex: Int?
+    /// 가운데 사진을 자동으로 정하는 중인지 (직접 고르면 false)
+    @Published private(set) var isAutoCenter = true
 
     private static let outputModeKey = "outputMode"
+    private static let outputWidthKey = "outputWidth"
     private let session: StitchSession
     private var sourceData: [Data] = []
-    /// 앱 카메라로 찍었을 때의 촬영 위치 (앨범에서 고른 사진은 nil — 원본 사진의 위치 정보를 복사)
+    /// 앱 카메라로 찍었을 때의 촬영 위치 (앨범·공유로 받은 사진은 nil — 원본 사진의 위치 정보를 복사)
     private var captureLocation: CaptureLocation?
-    private var jpegData: Data?
+    private var widthData: [OutputWidth: Data] = [:]
     private var counts: StitchCounts?
     private var centerFound = false
 
     init(maxPixelSize: Int, maxOutputSide: Int) {
         session = StitchSession(maxPixelSize: maxPixelSize, maxOutputSide: maxOutputSide)
-        let saved = UserDefaults.standard.object(forKey: Self.outputModeKey) as? Int
-        outputMode = saved.flatMap(OutputMode.init(rawValue:)) ?? .fit43
+        let savedMode = UserDefaults.standard.object(forKey: Self.outputModeKey) as? Int
+        outputMode = savedMode.flatMap(OutputMode.init(rawValue:)) ?? .fit43
+        let savedWidth = UserDefaults.standard.object(forKey: Self.outputWidthKey) as? Int
+        outputWidth = savedWidth.flatMap(OutputWidth.init(rawValue:)) ?? .actual
     }
 
     var isWorking: Bool {
         if case .working = phase { return true }
         return false
     }
-    var hasResult: Bool { jpegData != nil }
+    var hasResult: Bool { !widthData.isEmpty }
 
-    /// 새 사진들로 합성 시작
-    /// - Parameter centerIndex: 결과의 정중앙에 올 사진 번호. 기본 0 = 처음 고른 사진. nil = 지정 안 함.
-    func start(with data: [Data], location: CaptureLocation? = nil, centerIndex: Int? = 0) {
+    // MARK: 시작·합성
+
+    /// 새 사진들로 합성 시작. 가운데 사진은 자동으로 찾습니다.
+    func start(with data: [Data], location: CaptureLocation? = nil) {
         sourceData = data
         captureLocation = location
-        self.centerIndex = centerIndex.flatMap { $0 < data.count ? $0 : nil }
-        thumbnails = data.compactMap(Self.thumbnail)
+        centerIndex = nil
+        isAutoCenter = true
+        thumbnails = data.compactMap { Self.downsample($0, maxPixel: 200) }
         stitch()
-    }
-
-    /// 가운데 사진을 바꿉니다 (합성은 그대로, 자르기만 다시).
-    func selectCenter(_ index: Int?) {
-        guard counts != nil, !isWorking, index != centerIndex else { return }
-        centerIndex = index
-        let mode = outputMode
-        let session = session
-        phase = .working("가운데에 맞추는 중…")
-        saveMessage = nil
-        Task {
-            do {
-                let (found, jpeg) = try await Task.detached(priority: .userInitiated) {
-                    let f = session.setCenter(index)
-                    let j = try session.render(mode)
-                    return (f, j)
-                }.value
-                self.centerFound = found
-                self.show(jpeg)
-            } catch {
-                self.phase = .failed(error.localizedDescription)
-            }
-        }
-    }
-
-    private static func thumbnail(_ data: Data) -> UIImage? {
-        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-        let opts: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: 200,
-        ]
-        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
-        return UIImage(cgImage: cg)
     }
 
     func fail(_ message: String) {
@@ -108,32 +90,28 @@ final class StitchViewModel: ObservableObject {
         let projection = projection
         let mode = outputMode
         let session = session
-        let center = centerIndex
+        let chosen: Int? = isAutoCenter ? nil : centerIndex
         phase = .working("\(data.count)장 합성 중…\n(사진 수와 크기에 따라 수십 초 걸릴 수 있습니다)")
-        previewImage = nil
-        jpegData = nil
-        counts = nil
-        saveMessage = nil
-        warning = nil
+        clearResult()
 
         Task {
             do {
-                let (counts, found, jpeg) = try await Task.detached(priority: .userInitiated) {
+                let (counts, center, results) = try await Task.detached(priority: .userInitiated) {
                     let c = try session.stitch(data, projection: projection)
-                    let f = session.setCenter(center)
-                    let j = try session.render(mode)
-                    return (c, f, j)
+                    let ci = session.setCenter(chosen)
+                    let r = try session.renderAllWidths(mode)
+                    return (c, ci, r)
                 }.value
                 self.counts = counts
-                self.centerFound = found
-                self.show(jpeg)
+                self.apply(center)
+                self.show(results)
             } catch {
                 self.phase = .failed(error.localizedDescription)
             }
         }
     }
 
-    /// 합성은 그대로 두고 결과 형태(4:3 등)만 바꿔서 다시 만듭니다.
+    /// 합성은 그대로 두고 결과 형태(4:3 등)만 바꿔서 세 가지 넓이를 다시 만듭니다.
     func rerender() {
         guard counts != nil, !isWorking else { return }
         let mode = outputMode
@@ -142,44 +120,110 @@ final class StitchViewModel: ObservableObject {
         saveMessage = nil
         Task {
             do {
-                let jpeg = try await Task.detached(priority: .userInitiated) {
-                    try session.render(mode)
+                let results = try await Task.detached(priority: .userInitiated) {
+                    try session.renderAllWidths(mode)
                 }.value
-                self.show(jpeg)
+                self.show(results)
             } catch {
                 self.phase = .failed(error.localizedDescription)
             }
         }
     }
 
-    private func show(_ jpeg: Data) {
-        jpegData = jpeg
-        let image = UIImage(data: jpeg)
-        previewImage = image
+    /// 가운데 사진을 바꿉니다. nil = 자동. (합성은 그대로, 자르기만 다시)
+    func selectCenter(_ index: Int?) {
+        guard counts != nil, !isWorking else { return }
+        if index == nil && isAutoCenter { return }
+        if let index, !isAutoCenter, index == centerIndex { return }
+        isAutoCenter = (index == nil)
+        let mode = outputMode
+        let session = session
+        phase = .working("가운데에 맞추는 중…")
+        saveMessage = nil
+        Task {
+            do {
+                let (center, results) = try await Task.detached(priority: .userInitiated) {
+                    let ci = session.setCenter(index)
+                    let r = try session.renderAllWidths(mode)
+                    return (ci, r)
+                }.value
+                self.apply(center)
+                self.show(results)
+            } catch {
+                self.phase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// 넓이를 고릅니다 (이미 만들어 둔 결과 중에서 — 바로 바뀜).
+    func selectWidth(_ width: OutputWidth) {
+        guard widthData[width] != nil else { return }
+        outputWidth = width
+        saveMessage = nil
+        updatePreview()
+    }
+
+    // MARK: 결과 표시
+
+    private func clearResult() {
+        previewImage = nil
+        widthThumbnails = [:]
+        widthSizes = [:]
+        widthData = [:]
+        counts = nil
+        saveMessage = nil
+        warning = nil
+    }
+
+    private func apply(_ center: CenterInfo) {
+        centerFound = center.found
+        centerIndex = center.index
+    }
+
+    private func show(_ results: [OutputWidth: Data]) {
+        widthData = results
+        var thumbs: [OutputWidth: UIImage] = [:]
+        var sizes: [OutputWidth: CGSize] = [:]
+        for (w, d) in results {
+            if let t = Self.downsample(d, maxPixel: 480) { thumbs[w] = t }
+            if let s = Self.pixelSize(d) { sizes[w] = s }
+        }
+        widthThumbnails = thumbs
+        widthSizes = sizes
+        updatePreview()
+        phase = .done
+    }
+
+    private func updatePreview() {
+        guard let data = widthData[outputWidth] else { return }
+        previewImage = Self.downsample(data, maxPixel: 1400)
+
         var text = ""
         if let c = counts { text = "\(c.total)장 중 \(c.used)장 합성" }
-        if let image {
-            let w = Int(image.size.width * image.scale)
-            let h = Int(image.size.height * image.scale)
-            text += " · \(w)×\(h)"
-        }
+        if let s = widthSizes[outputWidth] { text += " · \(Int(s.width))×\(Int(s.height))" }
+        if let i = centerIndex { text += " · 가운데: \(i + 1)번" + (isAutoCenter ? " (자동)" : "") }
         info = text
+
         var warnings: [String] = []
         if let c = counts, c.planeFellBack {
-            warnings.append("넓게 찍혀서(가운데에서 최대 \(Int(c.maxAngleDegrees.rounded()))°) 평면으로는 펼 수 없어 원통으로 합성했습니다. 평면은 가운데에서 60° 이내일 때만 됩니다.")
+            warnings.append("넓게 찍혀서(가운데에서 최대 \(Int(c.maxAngleDegrees.rounded()))°) 평면 대신 원통으로 합성했습니다. 평면은 가운데에서 60° 이내일 때만 됩니다.")
         }
-        if let i = centerIndex, !centerFound {
-            warnings.append("가운데 사진(\(i + 1)번)의 위치를 찾지 못해 가장 크게 자르는 방식으로 잘랐습니다.")
+        if !centerFound {
+            warnings.append("가운데 기준을 찾지 못해 가장 크게 자르는 방식으로 잘랐습니다.")
         }
         if let c = counts, c.used < c.total {
             warnings.append("\(c.total - c.used)장은 겹치는 부분을 찾지 못해 빠졌습니다.")
         }
+        if outputWidth != .actual {
+            warnings.append("가장자리 일부는 실제로 찍히지 않은 곳을 주변 색으로 채운 것입니다.")
+        }
         warning = warnings.isEmpty ? nil : warnings.joined(separator: "\n")
-        phase = .done
     }
 
+    // MARK: 저장
+
     func save() {
-        guard let jpeg = jpegData, !isSaving else { return }
+        guard let jpeg = widthData[outputWidth], !isSaving else { return }
         isSaving = true
         saveMessage = nil
         Task {
@@ -191,5 +235,28 @@ final class StitchViewModel: ObservableObject {
             }
             self.isSaving = false
         }
+    }
+
+    // MARK: 도움
+
+    /// 이미지 데이터를 maxPixel 이하로 줄여 읽기 (메모리 절약)
+    private static func downsample(_ data: Data, maxPixel: Int) -> UIImage? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        return UIImage(cgImage: cg)
+    }
+
+    private static func pixelSize(_ data: Data) -> CGSize? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let w = props[kCGImagePropertyPixelWidth] as? Int,
+              let h = props[kCGImagePropertyPixelHeight] as? Int
+        else { return nil }
+        return CGSize(width: w, height: h)
     }
 }

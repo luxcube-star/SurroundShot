@@ -12,6 +12,7 @@
 #include <opencv2/stitching.hpp>
 #include <opencv2/calib3d.hpp>
 #include <opencv2/features2d.hpp>
+#include <opencv2/photo.hpp>
 
 #include <algorithm>
 #include <climits>
@@ -343,32 +344,140 @@ inline cv::Rect symmetricAround(const cv::Rect& r, const cv::Point2d& c) {
     return cv::Rect(x, y, w, h) & r;
 }
 
+// ── 가운데 사진 자동 찾기 ─────────────────────────────────────────
+
+struct CenterResult {
+    bool found = false;     // 기준점을 정했는지
+    int index = -1;         // 가운데 사진 번호 (-1 = 특정 사진 없음 → 모든 사진의 한가운데)
+    cv::Point2d point;      // 결과의 정중앙에 둘 점 (pano 좌표)
+};
+
+// 각 사진의 위치를 찾아, 모든 사진 위치의 한가운데에 '유난히 가까운' 사진이 있으면 그 사진을 가운데 사진으로.
+// 없으면(예: 2×2 네 장만) 모든 사진 위치의 한가운데 점을 기준점으로 씁니다.
+inline CenterResult autoCenter(const cv::Mat& pano, const std::vector<cv::Mat>& photos) {
+    CenterResult r;
+    std::vector<std::pair<int, cv::Point2d>> pts;
+    cv::Point2d sum(0, 0);
+    for (size_t i = 0; i < photos.size(); ++i) {
+        cv::Point2d c;
+        if (locatePhotoCenter(pano, photos[i], c)) {
+            pts.push_back({static_cast<int>(i), c});
+            sum += c;
+        }
+    }
+    if (pts.empty()) return r;
+    const cv::Point2d centroid = sum * (1.0 / pts.size());
+    std::vector<std::pair<double, int>> d;  // (거리, pts 안 번호)
+    for (size_t k = 0; k < pts.size(); ++k) d.push_back({cv::norm(pts[k].second - centroid), static_cast<int>(k)});
+    std::sort(d.begin(), d.end());
+    r.found = true;
+    if (d.size() == 1 || (d.size() >= 3 && d[0].first < 0.5 * d[1].first)) {
+        r.index = pts[d[0].second].first;
+        r.point = pts[d[0].second].second;
+    } else {
+        r.point = centroid;
+    }
+    return r;
+}
+
+// ── 빈 곳 허용(가장자리 채우기) ──────────────────────────────────
+
+// mask 의 '채워진 칸 수'를 빠르게 세기 위한 적분 영상
+struct MaskCounter {
+    cv::Mat integ;
+    explicit MaskCounter(const cv::Mat& mask) {
+        cv::Mat ones = mask / 255;
+        cv::integral(ones, integ, CV_32S);
+    }
+    double emptyRatio(const cv::Rect& r) const {
+        const int filled = integ.at<int>(r.y + r.height, r.x + r.width) - integ.at<int>(r.y, r.x + r.width)
+                         - integ.at<int>(r.y + r.height, r.x) + integ.at<int>(r.y, r.x);
+        return 1.0 - static_cast<double>(filled) / r.area();
+    }
+};
+
+// 사각형을 그림 밖으로 나가지 않고, 빈 곳 비율이 maxEmpty 이하인 동안 키웁니다.
+// keepAspect: 4:3 유지(가운데 고정)면 true, 원본 비율이면 가로·세로를 번갈아 키움.
+inline cv::Rect growRect(const cv::Mat& mask, cv::Rect r, cv::Point2d c, double aspect, bool keepAspect,
+                         double maxEmpty) {
+    const MaskCounter counter(mask);
+    const cv::Rect bounds(0, 0, mask.cols, mask.rows);
+    auto ok = [&](const cv::Rect& q) { return (q & bounds) == q && counter.emptyRatio(q) <= maxEmpty; };
+    const int step = std::max(4, std::max(mask.cols, mask.rows) / 400);
+    if (keepAspect) {
+        cv::Rect best = r;
+        for (int h = r.height + step;; h += step) {
+            const int w = static_cast<int>(std::floor(h * aspect));
+            const cv::Rect q(static_cast<int>(std::round(c.x - w / 2.0)), static_cast<int>(std::round(c.y - h / 2.0)), w, h);
+            if ((q & bounds) != q) break;
+            if (counter.emptyRatio(q) <= maxEmpty) best = q;
+        }
+        return best;
+    }
+    for (bool grew = true; grew;) {
+        grew = false;
+        const cv::Rect wider(r.x - step, r.y, r.width + 2 * step, r.height);
+        if (ok(wider)) { r = wider; grew = true; }
+        const cv::Rect taller(r.x, r.y - step, r.width, r.height + 2 * step);
+        if (ok(taller)) { r = taller; grew = true; }
+    }
+    return r;
+}
+
+// rect 부분을 잘라내고, 찍히지 않은 곳(mask 0)을 주변 색으로 채웁니다.
+inline cv::Mat cropAndFill(const cv::Mat& pano, const cv::Mat& mask, const cv::Rect& r) {
+    cv::Mat crop = pano(r).clone();
+    const cv::Mat hole = (mask(r) == 0);
+    if (cv::countNonZero(hole) == 0) return crop;
+    // 작게 줄여 채운 뒤 키워서 붙임 (빠르고 큰 빈 곳도 부드럽게)
+    const double s = std::min(1.0, 600.0 / std::max(crop.cols, crop.rows));
+    cv::Mat small, smallHole, filled, big, holeWide;
+    cv::resize(crop, small, cv::Size(), s, s, cv::INTER_AREA);
+    cv::resize(hole, smallHole, small.size(), 0, 0, cv::INTER_NEAREST);
+    cv::dilate(smallHole, smallHole, cv::Mat(), cv::Point(-1, -1), 2);
+    cv::inpaint(small, smallHole, filled, 5, cv::INPAINT_TELEA);
+    cv::resize(filled, big, crop.size(), 0, 0, cv::INTER_CUBIC);
+    cv::dilate(hole, holeWide, cv::Mat(), cv::Point(-1, -1), 3);
+    big.copyTo(crop, holeWide);
+    return crop;
+}
+
 // 합성 결과를 지정한 방식으로 잘라 반환합니다. 실패하면 빈 Mat.
 // maxSide: 결과 사진의 긴 변 최대 픽셀 (메모리·용량 제한용)
 // center: 주면 그 점(가운데 사진의 위치)이 결과의 정중앙에 오도록 자릅니다.
+// maxEmpty: 0 = 실제로 찍힌 부분만. 0.03 = 넓이의 3%까지 빈 곳을 허용하고 주변 색으로 채움.
 inline cv::Mat renderOutput(const cv::Mat& pano, const cv::Mat& mask, OutputMode mode, int maxSide,
-                            const cv::Point2d* center = nullptr) {
+                            const cv::Point2d* center = nullptr, double maxEmpty = 0) {
     const double aspect = 4.0 / 3.0;
     if (mode == OutputMode::Fill43) {
         cv::Rect r;
         if (center) r = largestAspectRectCenteredAt(mask, aspect, *center);
         if (r.area() == 0) r = largestAspectRect(mask, aspect);
-        return r.area() > 0 ? limitSize(pano(r), maxSide) : cv::Mat();
+        if (r.area() == 0) return cv::Mat();
+        if (maxEmpty > 0) {
+            const cv::Point2d c = center ? *center : cv::Point2d(r.x + r.width / 2.0, r.y + r.height / 2.0);
+            r = growRect(mask, r, c, aspect, true, maxEmpty);
+        }
+        return limitSize(cropAndFill(pano, mask, r), maxSide);
     }
     cv::Rect r = largestRect(mask);
     if (r.area() == 0) return cv::Mat();
     if (center) r = symmetricAround(r, *center);
-    if (mode == OutputMode::Original) return limitSize(pano(r), maxSide);
+    if (maxEmpty > 0) {
+        const cv::Point2d c(r.x + r.width / 2.0, r.y + r.height / 2.0);
+        r = growRect(mask, r, c, aspect, false, maxEmpty);
+    }
+    cv::Mat full = cropAndFill(pano, mask, r);
+    if (mode == OutputMode::Original) return limitSize(full, maxSide);
 
+    // Fit43: 내용 전체를 유지하고 흰 여백으로 4:3 맞추기 (가운데 정렬).
     // 여백 포함 크기가 maxSide 이내가 되도록 내용을 먼저 줄입니다.
-    const double longFit = std::max<double>(r.width, r.height * aspect);
-    int contentMax = std::max(r.width, r.height);
+    const double longFit = std::max<double>(full.cols, full.rows * aspect);
+    int contentMax = std::max(full.cols, full.rows);
     if (maxSide > 0 && longFit > maxSide) {
         contentMax = static_cast<int>(std::floor(contentMax * (maxSide / longFit)));
     }
-    cv::Mat content = limitSize(pano(r), contentMax);
-
-    // Fit43: 내용 전체를 유지하고 흰 여백으로 4:3 맞추기 (가운데 정렬)
+    cv::Mat content = limitSize(full, contentMax);
     int outW = content.cols, outH = content.rows;
     if (outW > outH * aspect) outH = static_cast<int>(std::ceil(outW / aspect));
     else outW = static_cast<int>(std::ceil(outH * aspect));

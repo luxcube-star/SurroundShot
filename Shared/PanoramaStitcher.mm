@@ -85,6 +85,7 @@ static NSString *SSMessageForStatus(cv::Stitcher::Status status) {
     _mask.release();
     _thumbs.clear();
     _centerFound = NO;
+    _centerIndex = -1;
     _usedCount = 0;
     _planeFellBack = NO;
     _maxAngleDegrees = 0;
@@ -137,20 +138,33 @@ static NSString *SSMessageForStatus(cv::Stitcher::Status status) {
 
 - (BOOL)setCenterPhotoIndex:(NSInteger)index {
     _centerFound = NO;
-    if (index < 0 || index >= (NSInteger)_thumbs.size() || _pano.empty()) return NO;
+    _centerIndex = -1;
+    if (_pano.empty() || index >= (NSInteger)_thumbs.size()) return NO;
     try {
-        cv::Point2d c;
-        if (stitchcore::locatePhotoCenter(_pano, _thumbs[(size_t)index], c)) {
-            _center = c;
-            _centerFound = YES;
+        if (index < 0) {
+            const stitchcore::CenterResult r = stitchcore::autoCenter(_pano, _thumbs);
+            if (r.found) {
+                _center = r.point;
+                _centerIndex = r.index;
+                _centerFound = YES;
+            }
+        } else {
+            cv::Point2d c;
+            if (stitchcore::locatePhotoCenter(_pano, _thumbs[(size_t)index], c)) {
+                _center = c;
+                _centerIndex = index;
+                _centerFound = YES;
+            }
         }
     } catch (...) {
         _centerFound = NO;
+        _centerIndex = -1;
     }
     return _centerFound;
 }
 
 - (nullable NSData *)jpegForOutputMode:(SSOutputMode)mode
+                              maxEmpty:(double)maxEmpty
                          maxOutputSide:(NSInteger)maxOutputSide
                                quality:(NSInteger)quality
                                  error:(NSError **)error {
@@ -164,7 +178,7 @@ static NSString *SSMessageForStatus(cv::Stitcher::Status status) {
         else if (mode == SSOutputModeOriginal) m = stitchcore::OutputMode::Original;
 
         cv::Mat out = stitchcore::renderOutput(_pano, _mask, m, (int)maxOutputSide,
-                                               _centerFound ? &_center : nullptr);
+                                               _centerFound ? &_center : nullptr, maxEmpty);
         if (out.empty()) {
             SSSetError(error, 21, @"자를 수 있는 영역을 찾지 못했습니다.");
             return nil;
