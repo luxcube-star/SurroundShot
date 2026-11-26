@@ -10,6 +10,8 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/stitching.hpp>
+#include <opencv2/calib3d.hpp>
+#include <opencv2/features2d.hpp>
 
 #include <algorithm>
 #include <climits>
@@ -233,6 +235,83 @@ inline cv::Rect largestRect(const cv::Mat& mask) {
     int y1 = std::min(mask.rows, static_cast<int>(std::floor((best.y + best.height) * inv)) - margin);
     if (x1 <= x0 || y1 <= y0) return cv::Rect();
     return cv::Rect(x0, y0, x1 - x0, y1 - y0);
+}
+
+// photo 가 pano 안의 어디에 있는지 특징점 매칭으로 찾아, photo 가운데 점의 pano 좌표를 돌려줍니다.
+// 못 찾으면 false.
+inline bool locatePhotoCenter(const cv::Mat& pano, const cv::Mat& photo, cv::Point2d& out) {
+    if (pano.empty() || photo.empty()) return false;
+    auto shrink = [](const cv::Mat& m, double maxSide, double& scale) {
+        scale = std::min(1.0, maxSide / std::max(m.cols, m.rows));
+        cv::Mat g, r;
+        cv::cvtColor(m, g, cv::COLOR_BGR2GRAY);
+        cv::resize(g, r, cv::Size(), scale, scale, cv::INTER_AREA);
+        return r;
+    };
+    double sp = 1, sq = 1;
+    const cv::Mat P = shrink(pano, 1600, sp);
+    const cv::Mat Q = shrink(photo, 1000, sq);
+    cv::Ptr<cv::ORB> orb = cv::ORB::create(5000);
+    std::vector<cv::KeyPoint> kp, kq;
+    cv::Mat dp, dq;
+    orb->detectAndCompute(P, cv::noArray(), kp, dp);
+    orb->detectAndCompute(Q, cv::noArray(), kq, dq);
+    if (dp.empty() || dq.empty()) return false;
+    cv::BFMatcher matcher(cv::NORM_HAMMING);
+    std::vector<std::vector<cv::DMatch>> knn;
+    matcher.knnMatch(dq, dp, knn, 2);
+    std::vector<cv::Point2f> src, dst;
+    for (const auto& m : knn) {
+        if (m.size() == 2 && m[0].distance < 0.75f * m[1].distance) {
+            src.push_back(kq[m[0].queryIdx].pt);
+            dst.push_back(kp[m[0].trainIdx].pt);
+        }
+    }
+    if (src.size() < 12) return false;
+    std::vector<uchar> inliers;
+    cv::Mat H = cv::findHomography(src, dst, cv::RANSAC, 4.0, inliers);
+    if (H.empty() || cv::countNonZero(inliers) < 12) return false;
+    std::vector<cv::Point2f> c = {cv::Point2f(Q.cols / 2.0f, Q.rows / 2.0f)}, mapped;
+    cv::perspectiveTransform(c, mapped, H);
+    out = cv::Point2d(mapped[0].x / sp, mapped[0].y / sp);
+    return out.x >= 0 && out.y >= 0 && out.x < pano.cols && out.y < pano.rows;
+}
+
+// center 를 정확히 가운데로 하는, mask 안에 들어가는 가장 큰 4:3 사각형.
+inline cv::Rect largestAspectRectCenteredAt(const cv::Mat& mask, double aspect, cv::Point2d center) {
+    if (mask.empty()) return cv::Rect();
+    const double s = std::min(1.0, 600.0 / std::max(mask.cols, mask.rows));
+    cv::Mat small;
+    cv::resize(mask, small, cv::Size(), s, s, cv::INTER_AREA);
+    cv::Mat bin = small >= 255;
+    cv::erode(bin, bin, cv::Mat(), cv::Point(-1, -1), 1);
+    cv::Mat ones = bin / 255, integ;
+    cv::integral(ones, integ, CV_32S);
+    const double cx = center.x * s, cy = center.y * s;
+    auto fits = [&](int h) {
+        const int w = static_cast<int>(std::floor(h * aspect));
+        const int x = static_cast<int>(std::round(cx - w / 2.0));
+        const int y = static_cast<int>(std::round(cy - h / 2.0));
+        if (x < 0 || y < 0 || x + w > bin.cols || y + h > bin.rows || w < 1) return false;
+        const int sum = integ.at<int>(y + h, x + w) - integ.at<int>(y, x + w) - integ.at<int>(y + h, x) + integ.at<int>(y, x);
+        return sum == w * h;
+    };
+    int lo = 1, hi = bin.rows, best = 0;
+    while (lo <= hi) {
+        const int mid = (lo + hi) / 2;
+        if (fits(mid)) { best = mid; lo = mid + 1; } else { hi = mid - 1; }
+    }
+    if (best == 0) return cv::Rect();
+    const double inv = 1.0 / s;
+    const int margin = static_cast<int>(std::ceil(inv)) + 2;
+    int h = static_cast<int>(std::floor(best * inv)) - 2 * margin;
+    int w = static_cast<int>(std::floor(h * aspect));
+    int x = static_cast<int>(std::round(center.x - w / 2.0));
+    int y = static_cast<int>(std::round(center.y - h / 2.0));
+    x = std::max(0, std::min(x, mask.cols - w));
+    y = std::max(0, std::min(y, mask.rows - h));
+    if (w <= 0 || h <= 0) return cv::Rect();
+    return cv::Rect(x, y, w, h);
 }
 
 enum class OutputMode {
