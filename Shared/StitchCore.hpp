@@ -330,16 +330,34 @@ inline cv::Mat limitSize(const cv::Mat& img, int maxSide) {
     return out;
 }
 
+// rect 를 center 기준으로 좌우·위아래 대칭이 되게 줄입니다 (center 가 rect 밖이면 그대로).
+inline cv::Rect symmetricAround(const cv::Rect& r, const cv::Point2d& c) {
+    if (!r.contains(cv::Point(static_cast<int>(c.x), static_cast<int>(c.y)))) return r;
+    const double hw = std::min(c.x - r.x, r.x + r.width - c.x);
+    const double hh = std::min(c.y - r.y, r.y + r.height - c.y);
+    const int x = static_cast<int>(std::ceil(c.x - hw));
+    const int y = static_cast<int>(std::ceil(c.y - hh));
+    const int w = static_cast<int>(std::floor(2 * hw));
+    const int h = static_cast<int>(std::floor(2 * hh));
+    if (w < 16 || h < 16) return r;
+    return cv::Rect(x, y, w, h) & r;
+}
+
 // 합성 결과를 지정한 방식으로 잘라 반환합니다. 실패하면 빈 Mat.
 // maxSide: 결과 사진의 긴 변 최대 픽셀 (메모리·용량 제한용)
-inline cv::Mat renderOutput(const cv::Mat& pano, const cv::Mat& mask, OutputMode mode, int maxSide) {
+// center: 주면 그 점(가운데 사진의 위치)이 결과의 정중앙에 오도록 자릅니다.
+inline cv::Mat renderOutput(const cv::Mat& pano, const cv::Mat& mask, OutputMode mode, int maxSide,
+                            const cv::Point2d* center = nullptr) {
     const double aspect = 4.0 / 3.0;
     if (mode == OutputMode::Fill43) {
-        cv::Rect r = largestAspectRect(mask, aspect);
+        cv::Rect r;
+        if (center) r = largestAspectRectCenteredAt(mask, aspect, *center);
+        if (r.area() == 0) r = largestAspectRect(mask, aspect);
         return r.area() > 0 ? limitSize(pano(r), maxSide) : cv::Mat();
     }
     cv::Rect r = largestRect(mask);
     if (r.area() == 0) return cv::Mat();
+    if (center) r = symmetricAround(r, *center);
     if (mode == OutputMode::Original) return limitSize(pano(r), maxSide);
 
     // 여백 포함 크기가 maxSide 이내가 되도록 내용을 먼저 줄입니다.

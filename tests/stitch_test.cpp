@@ -40,7 +40,10 @@ int main(int argc, char** argv) {
     if (argc < 5) { std::printf("usage\n"); return 1; }
     std::vector<cv::Mat> imgs;
     for (int i = 3; i < argc; ++i) { cv::Mat m = cv::imread(argv[i]); if (m.empty()) { std::printf("read fail %s\n", argv[i]); return 1; } imgs.push_back(m); }
-    const std::string pa = argv[2];
+    std::string pa = argv[2];
+    // "c-" 로 시작하면 첫 사진을 '가운데 사진'으로 (예: c-pla)
+    const bool useCenter = pa.rfind("c-", 0) == 0;
+    if (useCenter) pa = pa.substr(2);
     auto proj = pa == "sph" ? stitchcore::Projection::Spherical : pa == "pla" ? stitchcore::Projection::Plane : stitchcore::Projection::Cylindrical;
     int64 t0 = cv::getTickCount();
     auto r = stitchcore::stitchWithRetry(imgs, proj);
@@ -54,9 +57,13 @@ int main(int argc, char** argv) {
     cv::Rect lr = stitchcore::largestRect(r.mask);
     int holes2 = lr.area() - cv::countNonZero(r.mask(lr));
     std::printf("empty pixels inside 4:3 crop=%d, inside largestRect(%dx%d)=%d\n", holes, lr.width, lr.height, holes2);
+    cv::Point2d center;
+    const bool found = useCenter && stitchcore::locatePhotoCenter(r.pano, imgs[0], center);
+    if (useCenter) std::printf("center found=%d at (%.0f, %.0f)\n", (int)found, center.x, center.y);
+    const cv::Point2d* cp = found ? &center : nullptr;
     const char* names[3] = {"fill43", "fit43", "original"};
     for (int m = 0; m < 3; ++m) {
-        cv::Mat o = stitchcore::renderOutput(r.pano, r.mask, (stitchcore::OutputMode)m, 4000);
+        cv::Mat o = stitchcore::renderOutput(r.pano, r.mask, (stitchcore::OutputMode)m, 4000, cp);
         std::printf("  mode %-8s -> %dx%d ratio=%.4f\n", names[m], o.cols, o.rows, o.rows ? (double)o.cols / o.rows : 0);
         cv::imwrite(std::string(argv[1]) + "." + names[m] + ".jpg", o);
         if (o.empty()) holes = -1;

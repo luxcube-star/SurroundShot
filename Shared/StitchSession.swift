@@ -105,6 +105,13 @@ nonisolated final class StitchSession: @unchecked Sendable {
                             maxAngleDegrees: stitcher.maxAngleDegrees)
     }
 
+    /// index 번째 사진을 '가운데 사진'으로 지정 (nil = 없음). 합성 결과에서 위치를 찾으면 true.
+    func setCenter(_ index: Int?) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return stitcher.setCenterPhoto(index: index ?? -1)
+    }
+
     func render(_ mode: OutputMode) throws -> Data {
         lock.lock()
         defer { lock.unlock() }

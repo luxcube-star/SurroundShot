@@ -1,6 +1,7 @@
 // StitchViewModel.swift
 // 화면 상태 관리. 앱과 공유 확장이 함께 사용합니다.
 
+import ImageIO
 import SwiftUI
 import UIKit
 
@@ -23,6 +24,10 @@ final class StitchViewModel: ObservableObject {
     @Published private(set) var warning: String?
     @Published var saveMessage: String?
     @Published private(set) var isSaving = false
+    /// 입력 사진 작은 미리보기 (가운데 사진 고르기용)
+    @Published private(set) var thumbnails: [UIImage] = []
+    /// 가운데 사진 번호 (nil = 지정 안 함 → 가장 큰 사각형으로 자동)
+    @Published private(set) var centerIndex: Int?
 
     private static let outputModeKey = "outputMode"
     private let session: StitchSession
@@ -31,6 +36,7 @@ final class StitchViewModel: ObservableObject {
     private var captureLocation: CaptureLocation?
     private var jpegData: Data?
     private var counts: StitchCounts?
+    private var centerFound = false
 
     init(maxPixelSize: Int, maxOutputSide: Int) {
         session = StitchSession(maxPixelSize: maxPixelSize, maxOutputSide: maxOutputSide)
@@ -45,10 +51,47 @@ final class StitchViewModel: ObservableObject {
     var hasResult: Bool { jpegData != nil }
 
     /// 새 사진들로 합성 시작
-    func start(with data: [Data], location: CaptureLocation? = nil) {
+    /// - Parameter centerIndex: 결과의 정중앙에 올 사진 번호. 기본 0 = 처음 고른 사진. nil = 지정 안 함.
+    func start(with data: [Data], location: CaptureLocation? = nil, centerIndex: Int? = 0) {
         sourceData = data
         captureLocation = location
+        self.centerIndex = centerIndex.flatMap { $0 < data.count ? $0 : nil }
+        thumbnails = data.compactMap(Self.thumbnail)
         stitch()
+    }
+
+    /// 가운데 사진을 바꿉니다 (합성은 그대로, 자르기만 다시).
+    func selectCenter(_ index: Int?) {
+        guard counts != nil, !isWorking, index != centerIndex else { return }
+        centerIndex = index
+        let mode = outputMode
+        let session = session
+        phase = .working("가운데에 맞추는 중…")
+        saveMessage = nil
+        Task {
+            do {
+                let (found, jpeg) = try await Task.detached(priority: .userInitiated) {
+                    let f = session.setCenter(index)
+                    let j = try session.render(mode)
+                    return (f, j)
+                }.value
+                self.centerFound = found
+                self.show(jpeg)
+            } catch {
+                self.phase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    private static func thumbnail(_ data: Data) -> UIImage? {
+        guard let src = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let opts: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 200,
+        ]
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
+        return UIImage(cgImage: cg)
     }
 
     func fail(_ message: String) {
@@ -65,6 +108,7 @@ final class StitchViewModel: ObservableObject {
         let projection = projection
         let mode = outputMode
         let session = session
+        let center = centerIndex
         phase = .working("\(data.count)장 합성 중…\n(사진 수와 크기에 따라 수십 초 걸릴 수 있습니다)")
         previewImage = nil
         jpegData = nil
@@ -74,12 +118,14 @@ final class StitchViewModel: ObservableObject {
 
         Task {
             do {
-                let (counts, jpeg) = try await Task.detached(priority: .userInitiated) {
+                let (counts, found, jpeg) = try await Task.detached(priority: .userInitiated) {
                     let c = try session.stitch(data, projection: projection)
+                    let f = session.setCenter(center)
                     let j = try session.render(mode)
-                    return (c, j)
+                    return (c, f, j)
                 }.value
                 self.counts = counts
+                self.centerFound = found
                 self.show(jpeg)
             } catch {
                 self.phase = .failed(error.localizedDescription)
@@ -121,6 +167,9 @@ final class StitchViewModel: ObservableObject {
         var warnings: [String] = []
         if let c = counts, c.planeFellBack {
             warnings.append("넓게 찍혀서(가운데에서 최대 \(Int(c.maxAngleDegrees.rounded()))°) 평면으로는 펼 수 없어 원통으로 합성했습니다. 평면은 가운데에서 60° 이내일 때만 됩니다.")
+        }
+        if let i = centerIndex, !centerFound {
+            warnings.append("가운데 사진(\(i + 1)번)의 위치를 찾지 못해 가장 크게 자르는 방식으로 잘랐습니다.")
         }
         if let c = counts, c.used < c.total {
             warnings.append("\(c.total - c.used)장은 겹치는 부분을 찾지 못해 빠졌습니다.")

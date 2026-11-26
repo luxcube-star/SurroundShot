@@ -73,6 +73,8 @@ static NSString *SSMessageForStatus(cv::Stitcher::Status status) {
 @implementation PanoramaStitcher {
     cv::Mat _pano;
     cv::Mat _mask;
+    std::vector<cv::Mat> _thumbs;  // 가운데 사진 찾기용 작은 사본 (긴 변 800px)
+    cv::Point2d _center;
 }
 
 - (BOOL)stitchImageData:(NSArray<NSData *> *)imageData
@@ -81,6 +83,8 @@ static NSString *SSMessageForStatus(cv::Stitcher::Status status) {
                   error:(NSError **)error {
     _pano.release();
     _mask.release();
+    _thumbs.clear();
+    _centerFound = NO;
     _usedCount = 0;
     _planeFellBack = NO;
     _maxAngleDegrees = 0;
@@ -101,6 +105,10 @@ static NSString *SSMessageForStatus(cv::Stitcher::Status status) {
                     return NO;
                 }
                 images.push_back(m);
+                const double ts = std::min(1.0, 800.0 / std::max(m.cols, m.rows));
+                cv::Mat t;
+                cv::resize(m, t, cv::Size(), ts, ts, cv::INTER_AREA);
+                _thumbs.push_back(t);
             }
         }
         auto proj = stitchcore::Projection::Plane;
@@ -127,6 +135,21 @@ static NSString *SSMessageForStatus(cv::Stitcher::Status status) {
     return NO;
 }
 
+- (BOOL)setCenterPhotoIndex:(NSInteger)index {
+    _centerFound = NO;
+    if (index < 0 || index >= (NSInteger)_thumbs.size() || _pano.empty()) return NO;
+    try {
+        cv::Point2d c;
+        if (stitchcore::locatePhotoCenter(_pano, _thumbs[(size_t)index], c)) {
+            _center = c;
+            _centerFound = YES;
+        }
+    } catch (...) {
+        _centerFound = NO;
+    }
+    return _centerFound;
+}
+
 - (nullable NSData *)jpegForOutputMode:(SSOutputMode)mode
                          maxOutputSide:(NSInteger)maxOutputSide
                                quality:(NSInteger)quality
@@ -140,7 +163,8 @@ static NSString *SSMessageForStatus(cv::Stitcher::Status status) {
         if (mode == SSOutputModeFit43) m = stitchcore::OutputMode::Fit43;
         else if (mode == SSOutputModeOriginal) m = stitchcore::OutputMode::Original;
 
-        cv::Mat out = stitchcore::renderOutput(_pano, _mask, m, (int)maxOutputSide);
+        cv::Mat out = stitchcore::renderOutput(_pano, _mask, m, (int)maxOutputSide,
+                                               _centerFound ? &_center : nullptr);
         if (out.empty()) {
             SSSetError(error, 21, @"자를 수 있는 영역을 찾지 못했습니다.");
             return nil;

@@ -28,6 +28,10 @@ struct StitchPanel: View {
                 Text(model.projection.detail).font(.caption).foregroundStyle(.secondary)
             }
 
+            if model.thumbnails.count >= 2 {
+                centerPicker
+            }
+
             Divider()
 
             content
@@ -37,6 +41,47 @@ struct StitchPanel: View {
         }
         .onChange(of: model.projection) {
             if model.hasResult || isFailed { model.stitch() }
+        }
+    }
+
+    /// 가운데 사진 고르기: 누른 사진이 결과의 정중앙에 옵니다.
+    private var centerPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("가운데 사진").font(.subheadline.weight(.semibold))
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    Button { model.selectCenter(nil) } label: {
+                        Text("자동")
+                            .font(.caption.weight(.semibold))
+                            .frame(width: 56, height: 56)
+                            .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.15)))
+                            .overlay(RoundedRectangle(cornerRadius: 6)
+                                .stroke(model.centerIndex == nil ? Color.yellow : .clear, lineWidth: 3))
+                    }
+                    ForEach(Array(model.thumbnails.enumerated()), id: \.offset) { i, img in
+                        Button { model.selectCenter(i) } label: {
+                            ZStack(alignment: .topLeading) {
+                                Image(uiImage: img)
+                                    .resizable().scaledToFill()
+                                    .frame(width: 56, height: 56)
+                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                Text("\(i + 1)")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(3)
+                                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 3))
+                                    .padding(2)
+                            }
+                            .overlay(RoundedRectangle(cornerRadius: 6)
+                                .stroke(model.centerIndex == i ? Color.yellow : .clear, lineWidth: 3))
+                        }
+                    }
+                }
+                .padding(.vertical, 3)
+            }
+            .disabled(model.isWorking)
+            Text("노란 테두리 사진이 결과의 정중앙에 옵니다. '자동'은 가장 크게 자릅니다.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 

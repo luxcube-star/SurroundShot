@@ -264,7 +264,7 @@ final class CaptureModel: ObservableObject {
             }
         }
         let vm = StitchViewModel(maxPixelSize: 2400, maxOutputSide: 6000)
-        vm.start(with: data, location: loc)
+        vm.start(with: data, location: loc, centerIndex: nil)  // 앱 카메라: 가운데 사진 없음 (추후 [시작] 사진으로)
         resultModel = vm
         showResult = true
     }
